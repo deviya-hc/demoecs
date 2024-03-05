@@ -1,0 +1,82 @@
+name: Update Version Number.......Working
+
+on:
+  push:
+    branches: [ master] # Replace 'main' with your desired branch
+  #workflow_dispatch: 
+
+jobs:
+  update_version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Read current version
+        run: |
+          version=$(cat "./version_counter.txt" 2>/dev/null) || version=0
+          echo "Current version: $version"
+          version=$((version + 1))
+          echo "New version: $version"
+          echo "$version" > "./version_counter.txt"
+          echo "VERSION=$version" >> $GITHUB_ENV
+          echo "Version to be used: $VERSION" 
+          git config --global user.email "j.satapathy28@gmail.com"
+          git config --global user.name "jeebanj"
+          git add version_counter.txt
+          git commit -m "updating version"
+          git push origin master
+      #- name: Set GitHub environment variable
+        #run: |
+          #cat version_counter.txt 
+          #echo "VERSION=$version" >> $GITHUB_ENV
+          #echo  $VERSION
+
+      #- name: Print updated version
+        #run: |
+          #echo "Version to be used: $VERSION"
+          #version=$(cat "./version_counter.txt")
+          #echo $version
+
+      - name: Example usage of updated version (optional)
+        run: |
+          # Simulate your pipeline script's use of the version number
+          echo "Version used in this step: $GITHUB_ENV::VERSION"
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to AWS ECR
+        run: |
+         AWS_ECR_LOGIN="${{ secrets.AWS_ECR_LOGIN }}"
+         eval $AWS_ECR_LOGIN
+      - name: Build and tag Docker image
+        id: build-image
+        run: |
+          docker build --no-cache -t versionfile .
+          docker tag versionfile:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/versionfile:V${VERSION}
+          echo "image=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/versionfile:V${VERSION}" >> $GITHUB_OUTPUT
+      - name: Push Docker image to AWS ECR
+        run: |
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/versionfile:V${VERSION}
+      - name: Download task definition
+        run: |
+          aws ecs describe-task-definition --task-definition demotaskforpipeline --query taskDefinition > task-definition.json
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: demoecscontainer
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: demoservice
+          cluster: Democluster
+          wait-for-service-stability: true
